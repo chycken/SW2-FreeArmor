@@ -17,12 +17,13 @@ public class ConfigModel {
   public string AccessFlag { get; set; } = "";
 }
 
-[PluginMetadata(Id = "FreeArmor", Version = "1.0.0", Name = "FreeArmor", Author = "aga", Description = "Gives free armor on full buy rounds")]
+[PluginMetadata(Id = "FreeArmor", Version = "1.0.1", Name = "FreeArmor", Author = "aga", Description = "Gives free armor on full buy rounds")]
 public partial class FreeArmor : BasePlugin {
-  private int _roundInCurrentHalf = 0;
   private IOptionsMonitor<ConfigModel>? _config;
   private ServiceProvider? _serviceProvider;
   private IConVar<bool>? _enabledCvar;
+  private CCSGameRulesProxy? _gameRulesProxy;
+  private int _maxRounds = 30;
 
   public FreeArmor(ISwiftlyCore core) : base(core)
   {
@@ -52,19 +53,22 @@ public partial class FreeArmor : BasePlugin {
     _serviceProvider = services.BuildServiceProvider();
     _config = _serviceProvider.GetRequiredService<IOptionsMonitor<ConfigModel>>();
 
-    ResetHalfRoundTracking();
+    Core.Event.OnMapLoad += _ => {
+      Core.Scheduler.DelayBySeconds(1.0f, () => {
+        _gameRulesProxy = Core.EntitySystem.GetAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
+        var maxRoundsCvar = Core.ConVar.Find<int>("mp_maxrounds");
+        if (maxRoundsCvar != null)
+          _maxRounds = maxRoundsCvar.Value;
+      });
+    };
 
-    Core.Event.OnMapLoad += _ => ResetHalfRoundTracking();
-
-    Core.GameEvent.HookPre<EventRoundStart>(_ => {
-      _roundInCurrentHalf++;
-      return HookResult.Continue;
-    });
-
-    Core.GameEvent.HookPre<EventStartHalftime>(_ => {
-      ResetHalfRoundTracking();
-      return HookResult.Continue;
-    });
+    if (hotReload)
+    {
+      _gameRulesProxy = Core.EntitySystem.GetAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault();
+      var maxRoundsCvar = Core.ConVar.Find<int>("mp_maxrounds");
+      if (maxRoundsCvar != null)
+        _maxRounds = maxRoundsCvar.Value;
+    }
 
     Core.GameEvent.HookPre<EventPlayerSpawn>((@event) => {
       var player = @event.UserIdPlayer;
@@ -88,24 +92,53 @@ public partial class FreeArmor : BasePlugin {
         }
       }
 
-      var pawn = @event.UserIdPawn;
-      if (pawn == null)
+      var controller = player.Controller;
+      if (controller == null || !controller.IsValid)
         return HookResult.Continue;
 
-      var isPistolRound = _roundInCurrentHalf <= 1;
+      var pawnHandle = controller.PlayerPawn;
+      if (!pawnHandle.IsValid)
+        return HookResult.Continue;
 
-      var armorValue = isPistolRound ? 0 : 100;
-      var hasHelmet = !isPistolRound;
+      var pawn = pawnHandle.Value;
+      if (pawn == null || !pawn.IsValid)
+        return HookResult.Continue;
 
-      pawn.ArmorValue = armorValue;
-      pawn.ArmorValueUpdated();
+      if (_gameRulesProxy == null)
+        return HookResult.Continue;
 
-      var itemServices = pawn.ItemServices;
-      if (itemServices != null)
+      var gameRules = _gameRulesProxy.GameRules;
+      if (gameRules == null)
+        return HookResult.Continue;
+
+      int armorValue = 100;
+      bool hasHelmet = true;
+
+      if (!gameRules.WarmupPeriod)
       {
-        itemServices.HasHelmet = hasHelmet;
-        itemServices.HasHelmetUpdated();
+        int totalRounds = gameRules.TotalRoundsPlayed;
+
+        if (totalRounds == 0 || totalRounds == _maxRounds / 2)
+        {
+          armorValue = 0;
+          hasHelmet = false;
+        }
       }
+
+      Core.Scheduler.DelayBySeconds(0.1f, () => {
+        if (pawn == null || !pawn.IsValid)
+          return;
+
+        pawn.ArmorValue = armorValue;
+        pawn.ArmorValueUpdated();
+
+        var itemServices = pawn.ItemServices;
+        if (itemServices != null)
+        {
+          itemServices.HasHelmet = hasHelmet;
+          itemServices.HasHelmetUpdated();
+        }
+      });
 
       return HookResult.Continue;
     });
@@ -116,10 +149,6 @@ public partial class FreeArmor : BasePlugin {
     _serviceProvider = null;
     _config = null;
     _enabledCvar = null;
-  }
-
-  private void ResetHalfRoundTracking()
-  {
-    _roundInCurrentHalf = 0;
+    _gameRulesProxy = null;
   }
 }
