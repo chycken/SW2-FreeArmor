@@ -19,7 +19,7 @@ public class ConfigModel
   public string AccessFlag { get; set; } = "";
 }
 
-[PluginMetadata(Id = "FreeArmor", Version = "1.0.2", Name = "FreeArmor", Author = "aga (fixed)", Description = "Gives free armor on full buy rounds")]
+[PluginMetadata(Id = "FreeArmor", Version = "1.0.3", Name = "FreeArmor", Author = "aga", Description = "Gives free armor on full buy rounds")]
 public partial class FreeArmor : BasePlugin
 {
   private IOptionsMonitor<ConfigModel>? _config;
